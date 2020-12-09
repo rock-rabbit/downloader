@@ -25,7 +25,7 @@ func BarThreadOne(dl *Downloader, startSize, size int64, r io.Reader) io.Reader 
 	reader := io.LimitReader(r, size)
 	// 可以读取到文件大小时显示进度条
 	if size > 0 {
-		bar := dl.Bar.Start64(size)
+		bar := dl.GetBarTemplate().Start64(size)
 		bar.Add64(startSize)
 		barReader := bar.NewProxyReader(reader)
 		dl.AddDfer(func(dl *Downloader) {

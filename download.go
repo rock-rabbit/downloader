@@ -6,30 +6,30 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"strconv"
 	"time"
 
 	"github.com/cheggaaa/pb/v3"
 )
 
+// Rquest 请求参数
+type Rquest struct {
+	Client *http.Client
+	Method string      // 请求方式 默认 GET
+	Body   io.Reader   // 请求Body
+	Header http.Header // 头文件
+}
+
 // Options 下载参数
 type Options struct {
 	OutputPath string // 保存路径
 	OutputName string // 保存文件名 为空：自动生成
 
-	Replace bool // 是否允许覆盖文件
-
-	Client       *http.Client
-	RquestMethod string      // 请求方式 默认 GET
-	RquestBody   io.Reader   // 请求Body
-	RquestHeader http.Header // 头文件
+	Replace bool   // 是否允许覆盖文件
+	Rquest  Rquest // 请求参数
 
 	ThreadNum int // 下载线程数
 }
-
-// OnOver 文件下载完成事件
-type OnOver func(dl *Downloader)
 
 // OnRequest 设置
 type OnRequest func(*http.Request)
@@ -37,14 +37,25 @@ type OnRequest func(*http.Request)
 // OnDefer 完成事件
 type OnDefer func(dl *Downloader)
 
+// ProgressBar 进度条参数
+type ProgressBar struct {
+	IsBar       bool                   // 是否显示进度条
+	BarTemplate pb.ProgressBarTemplate // 进度条样式
+}
+
+// DownloadInfo 下载时的信息
+type DownloadInfo struct {
+	Size           int64  // 文件总大小
+	DownloadedSize *int64 // 已下载文件大小
+}
+
 // Downloader 下载信息
 type Downloader struct {
-	URL     string                 // 下载URL
-	Options *Options               // 下载参数
-	IsBar   bool                   // 是否显示进度条
-	Bar     pb.ProgressBarTemplate // 进度条
-	OnOver  OnOver                 // 下载完成事件，没有去掉.download
-	Defer   []OnDefer
+	URL         string        // 下载URL
+	Options     *Options      // 下载参数
+	ProgressBar ProgressBar   // 进度条参数
+	Defer       []OnDefer     // 下载关闭事件
+	Info        *DownloadInfo //下载时的信息
 }
 
 // New 创建一个简单的下载器
@@ -58,10 +69,14 @@ func NewDownloader(url string) *Downloader {
 	return &Downloader{
 		URL:     url,
 		Options: NewOptions(),
-		IsBar:   true,
-		Bar:     pb.Full,
-		OnOver:  func(dl *Downloader) {},
-		Defer:   []OnDefer{},
+		ProgressBar: ProgressBar{
+			IsBar:       true,
+			BarTemplate: pb.Full,
+		},
+		Defer: []OnDefer{},
+		Info: &DownloadInfo{
+			DownloadedSize: new(int64),
+		},
 	}
 }
 
@@ -71,72 +86,16 @@ func NewOptions() *Options {
 		OutputPath: "./",
 		OutputName: "",
 		Replace:    true,
-		Client: &http.Client{
-			Timeout: time.Second * 500,
+		Rquest: Rquest{
+			Client: &http.Client{
+				Timeout: time.Second * 500,
+			},
+			Method: "GET",
+			Body:   nil,
+			Header: http.Header{},
 		},
-		RquestBody:   nil,
-		RquestHeader: http.Header{},
-
 		ThreadNum: 1,
 	}
-}
-
-// AddDfer 添加Defer
-func (dl *Downloader) AddDfer(d OnDefer) *Downloader {
-	dl.Defer = append(dl.Defer, d)
-	return dl
-}
-
-// SetOutputPath 设置输出目录
-func (dl *Downloader) SetOutputPath(outputPath string) *Downloader {
-	if outputPath == "" {
-		outputPath = "./"
-	}
-	dl.Options.OutputPath = outputPath
-	return dl
-}
-
-// SetOutputName 设置输出文件名称
-func (dl *Downloader) SetOutputName(outputName string) *Downloader {
-	dl.Options.OutputName = outputName
-	return dl
-}
-
-// SetOnOver 设置OnOver
-func (dl *Downloader) SetOnOver(o OnOver) *Downloader {
-	dl.OnOver = o
-	return dl
-}
-
-// SetIsBar 设置是否打印进度条
-func (dl *Downloader) SetIsBar(i bool) *Downloader {
-	dl.IsBar = i
-	return dl
-}
-
-// SetThreadNum 设置下载线程数
-func (dl *Downloader) SetThreadNum(n int) *Downloader {
-	if n <= 1 {
-		dl.Options.ThreadNum = 1
-	} else {
-		dl.Options.ThreadNum = n
-	}
-	return dl
-}
-
-// GetPath 获取文件完整路径
-func (dl *Downloader) GetPath() string {
-	return path.Join(dl.Options.OutputPath, dl.Options.OutputName)
-}
-
-// GetTempName 获取临时文件名
-func (dl *Downloader) GetTempName() string {
-	return fmt.Sprintf("%s.download", dl.Options.OutputName)
-}
-
-// GetTempPath 获取临时文件完整路径
-func (dl *Downloader) GetTempPath() string {
-	return path.Join(dl.Options.OutputPath, dl.GetTempName())
 }
 
 // IsExist 目录与文件是否存在处理
@@ -167,7 +126,6 @@ func (dl *Downloader) IsExist(size int64, lastModified string) error {
 
 // DownloadOver 下载完成，强制覆盖，修改文件名称
 func (dl *Downloader) DownloadOver() error {
-	dl.OnOver(dl)
 	os.Remove(dl.GetPath())
 	if err := os.Rename(dl.GetTempPath(), dl.GetPath()); err != nil {
 		return err
@@ -177,13 +135,13 @@ func (dl *Downloader) DownloadOver() error {
 
 // Response 创建Response
 func (dl *Downloader) Response(onRequest OnRequest) (*http.Response, error) {
-	request, err := http.NewRequest(dl.Options.RquestMethod, dl.URL, dl.Options.RquestBody)
+	request, err := http.NewRequest(dl.Options.Rquest.Method, dl.URL, dl.Options.Rquest.Body)
 	if err != nil {
 		return nil, err
 	}
-	request.Header = dl.Options.RquestHeader
+	request.Header = dl.Options.Rquest.Header
 	onRequest(request)
-	resp, err := dl.Options.Client.Do(request)
+	resp, err := dl.Options.Rquest.Client.Do(request)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +228,9 @@ func (dl *Downloader) ThreadOne() error {
 		}
 		defer f.Close()
 		f.Seek(tempFileSize, 0)
-		var reader io.Reader = resp.Body
-		if dl.IsBar {
-			reader = BarThreadOne(dl, tempFileSize, size, resp.Body)
+		reader := dl.ProxyReader(resp.Body)
+		if dl.GetIsBar() {
+			reader = BarThreadOne(dl, tempFileSize, size, reader)
 		}
 		if _, err := io.Copy(f, reader); err != nil {
 			return err
@@ -285,9 +243,9 @@ func (dl *Downloader) ThreadOne() error {
 		return err
 	}
 	defer f.Close()
-	var reader io.Reader = resp.Body
-	if dl.IsBar {
-		reader = BarThreadOne(dl, 0, size, resp.Body)
+	reader := dl.ProxyReader(resp.Body)
+	if dl.GetIsBar() {
+		reader = BarThreadOne(dl, 0, size, reader)
 	}
 	if _, err := io.Copy(f, reader); err != nil {
 		return err
