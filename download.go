@@ -37,6 +37,12 @@ type OnRequest func(*http.Request)
 // OnDefer 完成事件
 type OnDefer func(dl *Downloader)
 
+// OnProgress 载进度回调
+// size				文件总大小，读取不出文件大小为0
+// speed			每秒下载大小，用来计算下载速度/s
+// downloadedSize	已下载文件大小
+type OnProgress func(size, speed, downloadedSize int64)
+
 // ProgressBar 进度条参数
 type ProgressBar struct {
 	IsBar       bool                   // 是否显示进度条
@@ -46,7 +52,8 @@ type ProgressBar struct {
 // DownloadInfo 下载时的信息
 type DownloadInfo struct {
 	Size           int64  // 文件总大小
-	DownloadedSize *int64 // 已下载文件大小
+	Speed          int64  // 每秒下载大小，用来计算下载速度/s
+	DownloadedSize *int64 // 已下载文件大小，原子操作
 }
 
 // Downloader 下载信息
@@ -55,7 +62,8 @@ type Downloader struct {
 	Options     *Options      // 下载参数
 	ProgressBar ProgressBar   // 进度条参数
 	Defer       []OnDefer     // 下载关闭事件
-	Info        *DownloadInfo //下载时的信息
+	Info        *DownloadInfo // 下载时的信息
+	OnProgress  OnProgress    // 下载进度回调
 }
 
 // New 创建一个简单的下载器
@@ -77,6 +85,7 @@ func NewDownloader(url string) *Downloader {
 		Info: &DownloadInfo{
 			DownloadedSize: new(int64),
 		},
+		OnProgress: func(size, speed, downloadedSize int64) {},
 	}
 }
 
@@ -170,6 +179,10 @@ func (dl *Downloader) Start() error {
 
 // Thread 多线程下载器
 func (dl *Downloader) Thread() error {
+	if !dl.IsRanges() {
+		// 不支持多线程下载时，自动单线程下载
+		return dl.ThreadOne()
+	}
 	return nil
 }
 
@@ -191,6 +204,7 @@ func (dl *Downloader) ThreadOne() error {
 			return err
 		}
 	}
+	dl.Info.Size = size
 	if dl.Options.OutputName == "" {
 		dl.Options.OutputName = GetFilename(dl.URL, resp.Header.Get("Content-Disposition"), resp.Header.Get("Content-Type"))
 	} else {
@@ -212,6 +226,8 @@ func (dl *Downloader) ThreadOne() error {
 		return dl.DownloadOver()
 	}
 	if tempFileSize != 0 && dl.IsRanges() {
+		dl.Info.AddDownloadedSize(tempFileSize)
+		go dl.StatSpeed() // 统计下载速度
 		resp, err := dl.Response(func(req *http.Request) {
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", tempFileSize))
 		})
@@ -238,6 +254,7 @@ func (dl *Downloader) ThreadOne() error {
 		f.Close()
 		return dl.DownloadOver()
 	}
+	go dl.StatSpeed() // 统计下载速度
 	f, err := os.OpenFile(dl.GetTempPath(), os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
 		return err
@@ -252,6 +269,16 @@ func (dl *Downloader) ThreadOne() error {
 	}
 	f.Close()
 	return dl.DownloadOver()
+}
+
+// StatSpeed 统计下载速度
+func (dl *Downloader) StatSpeed() {
+	tempSize := dl.Info.GetDownloadedSize()
+	for {
+		time.Sleep(time.Second)
+		dl.Info.Speed = dl.Info.GetDownloadedSize() - tempSize
+		tempSize = dl.Info.Speed
+	}
 }
 
 // Defer 下载关闭事件

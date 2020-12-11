@@ -2,6 +2,8 @@ package downloader
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"path"
 	"sync/atomic"
 
@@ -16,6 +18,30 @@ func (info *DownloadInfo) AddDownloadedSize(v int64) {
 // GetDownloadedSize 获取已下载文件大小
 func (info *DownloadInfo) GetDownloadedSize() int64 {
 	return atomic.LoadInt64(info.DownloadedSize)
+}
+
+// SetOnProgress 设置进度事件
+func (dl *Downloader) SetOnProgress(f OnProgress) *Downloader {
+	dl.OnProgress = f
+	return dl
+}
+
+// SetClient 设置请求Client
+func (dl *Downloader) SetClient(Client *http.Client) *Downloader {
+	dl.Options.Rquest.Client = Client
+	return dl
+}
+
+// SetMethod 设置请求Method
+func (dl *Downloader) SetMethod(method string) *Downloader {
+	dl.Options.Rquest.Method = method
+	return dl
+}
+
+// SetBody 设置请求Body
+func (dl *Downloader) SetBody(body io.Reader) *Downloader {
+	dl.Options.Rquest.Body = body
+	return dl
 }
 
 // SetHeader 设置请求时的Header

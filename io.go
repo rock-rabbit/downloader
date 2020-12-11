@@ -12,6 +12,7 @@ type IoProxyReader struct {
 func (r *IoProxyReader) Read(p []byte) (n int, err error) {
 	n, err = r.Reader.Read(p)
 	r.dl.Info.AddDownloadedSize(int64(n))
+	r.dl.OnProgress(r.dl.Info.Size, r.dl.Info.Speed, r.dl.Info.GetDownloadedSize())
 	return n, err
 }
 
